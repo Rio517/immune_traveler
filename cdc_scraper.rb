@@ -10,12 +10,17 @@ module Cdc
     def initialize(args)
       args.each{|k,v| instance_variable_set("@#{k}",v) }
     end
+
     def attributes
       Hash[instance_variables.map { |var| [var[1..-1].to_sym, instance_variable_get(var)] }]
     end
 
     def indexer
       @destination_index ||= DestinationIndexer.new
+    end
+
+    def index_name
+      self.class.name.downcase
     end
   end
 
@@ -97,7 +102,7 @@ module Cdc
     attr_accessor :id, :name, :last_updated
 
     def index!
-      indexer.index index: 'immune_traveler', type: 'destination', body: attributes
+      indexer.index index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, body: attributes
     end
   end
 
@@ -107,15 +112,15 @@ module Cdc
     attr_accessor :id, :name, :content, :conditions
 
     def indexed?
-      indexer.exists index: 'immune_traveler', type: 'disease', id: id
+      indexer.exists index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, id: id
     end
 
     def index!
-      indexer.index(index: 'immune_traveler', type: 'disease', body: attributes) unless indexed?
+      indexer.index(index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, body: attributes) unless indexed?
     end
 
     def add_destination!(destination)
-      indexer.update index: 'immune_traveler', type: 'disease', id: id,
+      indexer.update index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, id: id,
                     body: { script: 'ctx._source.destinations += destination', params: { destination: destination } }
     end
   end
@@ -125,6 +130,7 @@ module Cdc
     include Elasticsearch::API
 
     CONNECTION = ::Faraday::Connection.new url: 'http://localhost:9200'
+    ES_INDEX_NAME = 'immune_traveler'
 
     def perform_request(method, path, params, body)
       puts "--> #{method.upcase} #{path} #{params} #{body}"
@@ -136,9 +142,10 @@ module Cdc
         {'Content-Type' => 'application/json'}
     end
 
-    def create_indices!
+    def create_indices!(force)
+      puts 'Index already exists' if self.exists(index: ES_INDEX_NAME)
       self.indices.create \
-        index: 'immune_traveler',
+        index: ES_INDEX_NAME,
         body: {
           diseases:{
             properties: {
