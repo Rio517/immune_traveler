@@ -20,7 +20,7 @@ module Cdc
     end
 
     def index_name
-      self.class.name.downcase
+      self.class.name.split('::').last.downcase
     end
   end
 
@@ -52,7 +52,7 @@ module Cdc
     end
 
     def self.fetch_all_destinations!
-      destinations.each do |destination_name|
+      destinations[20..40].each do |destination_name|
         fetch_destination_info(destination_name)
       end
     end
@@ -60,7 +60,7 @@ module Cdc
     private
 
     def self.destinations
-      @destinations ||= fetch_destination_list
+      @destinations ||= fetch_destination_list.compact
     end
 
     def self.fetch_destination_list
@@ -78,10 +78,13 @@ module Cdc
       destination = Destination.new name: destination_name
       destination.last_updated = Date.parse(doc.css('li.last-updated span').text.strip)
       doc.css('.disease tr').each do |node|
+        name = node.css('.traveler-disease').text.strip
+        next if name.empty?
         disease = Disease.new(
-          id:      name = node.css('.traveler-disease').text.strip,
+          id:      name.downcase,
           name:    name,
-          content: node.css('.traveler-findoutwhy > p').text.strip
+          content: node.css('.traveler-findoutwhy > p').text.strip,
+          destinations: [destination_name]
         )
         disease.conditions = node.css('.traveler-findoutwhy .population').map do |condition_node|
           {
@@ -109,19 +112,23 @@ module Cdc
 
   class Disease
     include Common
-    attr_accessor :id, :name, :content, :conditions
+    attr_accessor :id, :name, :content, :conditions, :destinations
 
     def indexed?
       indexer.exists index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, id: id
     end
 
+    def index_attributes
+      attributes.delete_if{|k,v| k == 'id'}.merge(destinations: [])
+    end
+
     def index!
-      indexer.index(index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, body: attributes) unless indexed?
+      indexer.index(index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, id: id, body: index_attributes) unless indexed?
     end
 
     def add_destination!(destination)
       indexer.update index: DestinationIndexer::ES_INDEX_NAME, type: self.index_name, id: id,
-                    body: { script: 'ctx._source.destinations += destination', params: { destination: destination } }
+                    body: { script: 'ctx._source.destinations += destination', params: {destination: destination.attributes } }
     end
   end
 
@@ -142,8 +149,8 @@ module Cdc
         {'Content-Type' => 'application/json'}
     end
 
-    def create_indices!(force)
-      puts 'Index already exists' if self.exists(index: ES_INDEX_NAME)
+    def create_indices!(force=false)
+      # puts 'Index already exists' if self.exists(index: ES_INDEX_NAME)
       self.indices.create \
         index: ES_INDEX_NAME,
         body: {
