@@ -16,7 +16,7 @@ module Cdc
     end
 
     def indexer
-      @destination_index ||= DestinationIndexer.new
+      @@destination_index ||= DestinationIndexer.new
     end
 
     def index_name
